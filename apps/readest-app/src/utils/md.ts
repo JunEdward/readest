@@ -8,6 +8,7 @@ import {
   buildChapterFootnotes,
   expandInlineFootnotes,
   extractFootnoteDefs,
+  normalizeFootnoteDefinitionIndent,
 } from './mdFootnotes';
 import { frontmatterToMetadata, parseFrontmatter } from './mdFrontmatter';
 import { sanitizeHtml } from './sanitize';
@@ -25,7 +26,7 @@ const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 // annotation note renderer and the export dialog, and must not gain footnote
 // parsing as a side effect.
 const markdown = new Marked({ gfm: true }).use(markedFootnote({ prefixId: FOOTNOTE_PREFIX_ID }), {
-  hooks: { preprocess: expandInlineFootnotes },
+  hooks: { preprocess: (src) => expandInlineFootnotes(normalizeFootnoteDefinitionIndent(src)) },
 });
 
 // Minimal defaults so code blocks wrap inside the paginated column (long lines
@@ -196,9 +197,10 @@ export async function makeMarkdownBook(file: File): Promise<BookDoc> {
         data: str,
         type: 'application/xhtml+xml',
       };
-      // Readonly, mirroring foliate's Loader.createURL dispatch. Selection
-      // scoped proofread rules compare their TOC-style sectionHref
-      // ("<index>#<anchor>") against this name via split('#')[0].
+      // Readonly, mirroring foliate's Loader.createURL dispatch. Markdown
+      // sections carry no spine CFI, so selection-scoped proofread rules fall
+      // back to matching their sectionHref against this name; both are the
+      // section index ("<index>", or "<index>#<anchor>" via split('#')[0]).
       Object.defineProperty(detail, 'name', { value: String(index) });
       transformTarget.dispatchEvent(new CustomEvent('data', { detail }));
       const out = await detail.data;
@@ -236,10 +238,12 @@ export async function makeMarkdownBook(file: File): Promise<BookDoc> {
     createDocument: async () => new DOMParser().parseFromString(str, 'application/xhtml+xml'),
   }));
 
-  const title =
-    frontmatter.title ||
-    (headingEls.find((h) => h.tagName === 'H1')?.textContent ?? '').trim() ||
-    file.name.replace(/\.(?:md|markdown)$/i, '');
+  // The filename is the title unless frontmatter — an explicit metadata block —
+  // says otherwise. A heading is body content: preferring the first <h1> made
+  // every note whose first line is a heading import under that heading instead
+  // of its own name, and the <h1> was matched by tag name rather than position,
+  // so one buried mid-document could win even when the file opened with an <h2>.
+  const title = frontmatter.title || file.name.replace(/\.(?:md|markdown)$/i, '');
 
   const book = {
     metadata: {

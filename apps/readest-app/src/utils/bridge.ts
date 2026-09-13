@@ -145,6 +145,17 @@ export async function invokeUseBackgroundAudio(request: UseBackgroundAudioReques
   });
 }
 
+/**
+ * Acquire or release the Android WifiManager MulticastLock so LocalSend
+ * discovery announcements are delivered. Android only; a no-op elsewhere
+ * (callers gate on isAndroidApp).
+ */
+export async function setMulticastLock(acquire: boolean): Promise<void> {
+  await invoke('plugin:native-bridge|set_multicast_lock', {
+    payload: { acquire },
+  });
+}
+
 // Suppress a piece of the OS text-selection UI that would fight the reader's
 // own selection UX:
 //  - target 'gesture' (iOS): the system long-press selection for non-editable
@@ -288,6 +299,14 @@ export async function selectDirectory(): Promise<SelectDirectoryResponse> {
   return result;
 }
 
+// Android only. Opens the system document picker fire-and-forget; the picked
+// URIs come back as a `file-picker-result` plugin event (see
+// useAndroidPickedBooks) so they survive the activity/process being torn down
+// while the picker is in the foreground (#1217).
+export async function showFilePicker(): Promise<void> {
+  await invoke('plugin:native-bridge|show_file_picker');
+}
+
 export async function getStorefrontRegionCode(): Promise<GetStorefrontRegionCodeResponse> {
   const result = await invoke<GetStorefrontRegionCodeResponse>(
     'plugin:native-bridge|get_storefront_region_code',
@@ -327,6 +346,29 @@ export async function captureWebviewRegion(
   return await invoke<ArrayBuffer>('plugin:native-bridge|capture_webview_region', {
     payload: request,
   });
+}
+
+export interface CoverWebviewRegionResponse {
+  token: number;
+}
+
+/**
+ * Freeze the on-screen pixels of a webview region behind a native snapshot
+ * view that `captureWebviewRegion` does not see (iOS only so far). The
+ * two-column page curl uses it to capture the incoming column under its
+ * overlay without ever showing it (#6106). Rejects where unimplemented.
+ */
+export async function coverWebviewRegion(
+  request: CaptureWebviewRegionRequest,
+): Promise<CoverWebviewRegionResponse> {
+  return await invoke<CoverWebviewRegionResponse>('plugin:native-bridge|cover_webview_region', {
+    payload: request,
+  });
+}
+
+/** Remove the cover put up by `coverWebviewRegion`; stale tokens are ignored. */
+export async function uncoverWebviewRegion(request: { token: number }): Promise<void> {
+  await invoke('plugin:native-bridge|uncover_webview_region', { payload: request });
 }
 
 // ── Sync passphrase keychain ────────────────────────────────────────────
@@ -467,4 +509,30 @@ export async function installNightlyUpdate(
   const channel = new Channel<NightlyProgress>();
   if (onProgress) channel.onmessage = onProgress;
   await invoke<void>('install_nightly_update', { endpoint, channel });
+}
+
+export interface ICloudContainerStatusResponse {
+  available: boolean;
+  documentsPath?: string;
+}
+
+export interface ICloudEnsureDownloadedRequest {
+  path: string;
+  timeoutMs?: number;
+}
+
+export interface ICloudEnsureDownloadedResponse {
+  status: 'ready' | 'notFound' | 'timeout';
+}
+
+export async function getICloudContainerStatus(): Promise<ICloudContainerStatusResponse> {
+  return invoke<ICloudContainerStatusResponse>('plugin:native-bridge|icloud_container_status');
+}
+
+export async function icloudEnsureDownloaded(
+  request: ICloudEnsureDownloadedRequest,
+): Promise<ICloudEnsureDownloadedResponse> {
+  return invoke<ICloudEnsureDownloadedResponse>('plugin:native-bridge|icloud_ensure_downloaded', {
+    payload: request,
+  });
 }

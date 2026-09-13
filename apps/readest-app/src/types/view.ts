@@ -26,6 +26,9 @@ export interface Renderer extends HTMLElement {
   atStart: boolean;
   atEnd: boolean;
   containerPosition: number;
+  // Sub-pixel remainder of the scroll position, rendered as a transform on the
+  // scrollport because scroll offsets themselves quantize to whole CSS pixels.
+  subpixelOffset: number;
   scrollProp: 'scrollLeft' | 'scrollTop';
   sideProp: 'width' | 'height';
   pageColors?: {
@@ -75,7 +78,7 @@ export interface FoliateView extends HTMLElement {
   open: (book: BookDoc) => Promise<void>;
   close: () => void;
   init: (options: { lastLocation: string }) => void;
-  goTo: (href: string) => void;
+  goTo: (target: string | number) => void;
   goToFraction: (fraction: number) => void;
   getSectionFractions: () => number[];
   prev: (distance?: number) => void;
@@ -85,7 +88,7 @@ export interface FoliateView extends HTMLElement {
   isOverflowY: () => boolean;
   goLeft: () => void;
   goRight: () => void;
-  getCFI: (index: number, range: Range) => string;
+  getCFI: (index: number, range?: Range) => string;
   getCFIProgress: (cfi: string) => Promise<{
     fraction: number;
     section: { current: number; total: number };
@@ -145,11 +148,11 @@ export const wrappedFoliateView = (originalView: FoliateView): FoliateView => {
   // Foliate's runtime implementation returns a Promise. Returning a Promise
   // here is compatible with the void return type in TypeScript and lets callers
   // that know about the promise (e.g. tests, async handlers) await completion.
-  originalView.goTo = (href: string): Promise<void> => {
+  originalView.goTo = (target: string | number): Promise<void> => {
     // Cross-section jumps can take seconds (the target section's images block
     // its iframe load); surface start/end so the viewer can show a spinner.
     originalView.dispatchEvent(new CustomEvent('navigate-start'));
-    return Promise.resolve(originalGoTo(href)).finally(() => {
+    return Promise.resolve(originalGoTo(target)).finally(() => {
       originalView.dispatchEvent(new CustomEvent('navigate-end'));
     });
   };

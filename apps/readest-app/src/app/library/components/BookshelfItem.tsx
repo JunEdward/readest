@@ -4,7 +4,7 @@ import { useEnv } from '@/context/EnvContext';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useLongPress } from '@/hooks/useLongPress';
-import { Menu } from '@tauri-apps/api/menu';
+import { Menu, MenuItem } from '@tauri-apps/api/menu';
 import { LogicalPosition } from '@tauri-apps/api/dpi';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { eventDispatcher } from '@/utils/event';
@@ -21,6 +21,8 @@ import {
   type BookContextMenuItemId,
 } from '@/app/library/utils/libraryUtils';
 import { md5Fingerprint } from '@/utils/md5';
+import { isTauriAppPlatform } from '@/services/environment';
+import { isLocalSendEnabled } from '@/services/localsend/devicePrefs';
 import BookItem from './BookItem';
 import GroupItem from './GroupItem';
 import BookContextMenuPopup, { type BookContextMenuItem } from './BookContextMenuPopup';
@@ -85,6 +87,61 @@ export const generateBookshelfItems = (
   );
 
   return [...ungroupedBooks, ...groupedBooks].sort((a, b) => b.updatedAt - a.updatedAt);
+};
+
+// A native popup blocks Tauri's main thread until the menu is dismissed and
+// holds the webview's resources table lock for that whole time, while
+// menu.close() destroys the resource through a *synchronous* command, which
+// runs on that same main thread. Releasing a menu while a popup is on screen
+// therefore deadlocks the app: the main thread blocks on a lock that only the
+// dismissal releases, and a blocked main thread can no longer dismiss the
+// menu. The library's startup churn (books streaming in, covers, sync) used
+// to re-render right into that window and freeze the app for good.
+// Native popups are modal and app-wide, so the gate is module scoped: a
+// release queued by any bookshelf item would freeze another item's popup.
+let openPopup: Promise<unknown> | null = null;
+
+const trackPopup = async (popup: Promise<void>) => {
+  const settled = popup.catch(() => {});
+  openPopup = settled;
+  await settled;
+  if (openPopup === settled) openPopup = null;
+};
+
+interface NativeMenu {
+  menu: Menu;
+  items: MenuItem[];
+}
+
+// Menu.new({ items: [{ text, action }] }) builds each inline item as a Rust
+// temporary: the action's channel is registered under the item id and then
+// unregistered again the moment the built menu drops the last reference to
+// that wrapper, so the menu pops up with every entry dead (issue #6142, from
+// the tauri 2.11.5 bump in #6081). Items created through MenuItem.new are
+// owned by the webview's resource table, so their channels outlive the build.
+const buildNativeMenu = async (items: BookContextMenuItem[]): Promise<NativeMenu> => {
+  // Create every item before the single Menu.new({ items }) call so the order
+  // is whatever the list says — see the Menu.append() IPC race in #4389.
+  const menuItems = await Promise.all(items.map((item) => MenuItem.new(item)));
+  return { menu: await Menu.new({ items: menuItems }), items: menuItems };
+};
+
+const releaseMenu = (built: Promise<NativeMenu>) => {
+  const close = () => {
+    if (openPopup) {
+      void openPopup.then(close);
+      return;
+    }
+    // The items are owned separately from the menu, so closing the menu alone
+    // would leak one resource per entry on every rebuild.
+    void built
+      .then(async ({ menu, items }) => {
+        await menu.close();
+        await Promise.all(items.map((item) => item.close()));
+      })
+      .catch(() => {});
+  };
+  close();
 };
 
 interface BookshelfItemProps {
@@ -250,6 +307,13 @@ const BookshelfItem: React.FC<BookshelfItemProps> = ({
           eventDispatcher.dispatch('show-share-dialog', { book });
         },
       },
+      sendNearby: {
+        text: _('Send to Nearby Device'),
+        action: async () => {
+          // LocalSendManager hosts the device picker and resolves the file.
+          eventDispatcher.dispatch('localsend-send-books', { books: [book] });
+        },
+      },
       delete: {
         text: _('Delete'),
         action: async () => {
@@ -257,7 +321,9 @@ const BookshelfItem: React.FC<BookshelfItemProps> = ({
         },
       },
     };
-    return getBookContextMenuItemIds(book).map((id) => itemOptions[id]);
+    return getBookContextMenuItemIds(book, {
+      localSend: isTauriAppPlatform() && isLocalSendEnabled(),
+    }).map((id) => itemOptions[id]);
   };
 
   const buildGroupMenuItems = (group: BooksGroup): BookContextMenuItem[] => {
@@ -309,11 +375,11 @@ const BookshelfItem: React.FC<BookshelfItemProps> = ({
   // that the popup visibly lags the right-click (issue #5181). Cache the
   // built menu so popup() fires immediately; hovering the item prewarms the
   // cache so even the first opening is instant.
-  const cachedMenuRef = useRef<Promise<Menu> | null>(null);
+  const cachedMenuRef = useRef<Promise<NativeMenu> | null>(null);
 
   const ensureMenu = () => {
     if (!cachedMenuRef.current) {
-      const building = Menu.new({ items: buildMenuItems() });
+      const building = buildNativeMenu(buildMenuItems());
       building.catch(() => {
         // A failed build must not poison the cache with a rejected promise.
         if (cachedMenuRef.current === building) cachedMenuRef.current = null;
@@ -325,12 +391,13 @@ const BookshelfItem: React.FC<BookshelfItemProps> = ({
 
   // Drop the cache whenever state baked into the items changes (selection
   // label, book status, reveal path, language); the cleanup also runs on
-  // unmount so the native menu resource is released.
+  // unmount so the native menu resource is released — but never while a popup
+  // is still on screen, see releaseMenu.
   useEffect(() => {
     return () => {
       const cached = cachedMenuRef.current;
       cachedMenuRef.current = null;
-      cached?.then((menu) => menu.close()).catch(() => {});
+      if (cached) releaseMenu(cached);
     };
   }, [item, itemSelected, isSelectMode, settings.localBooksDir, _]);
 
@@ -373,13 +440,13 @@ const BookshelfItem: React.FC<BookshelfItemProps> = ({
         setInAppMenuPosition(position);
         return;
       }
-      const menu = await ensureMenu();
+      const { menu } = await ensureMenu();
       // Pop up at an explicit position so keyboard invocation (ContextMenu /
       // Shift+F10) anchors the menu to the item instead of wherever the mouse
       // happens to sit. On macOS and Windows — the only platforms still on the
       // native menu — CSS px are window-logical px, so the client coordinates
       // pass through unchanged.
-      await menu.popup(new LogicalPosition(position.x, position.y));
+      await trackPopup(menu.popup(new LogicalPosition(position.x, position.y)));
     }, 100),
     [item, itemSelected, isSelectMode, settings.localBooksDir],
   );

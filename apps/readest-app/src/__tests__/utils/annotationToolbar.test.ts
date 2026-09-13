@@ -8,6 +8,8 @@ import {
   addToolToToolbar,
   removeToolFromToolbar,
   reorderToolbar,
+  shouldShowHighlightOptions,
+  supportsProofread,
 } from '@/utils/annotationToolbar';
 
 describe('annotationToolbar helpers', () => {
@@ -92,5 +94,59 @@ describe('annotationToolbar helpers', () => {
       'highlight',
     ]);
     expect(reorderToolbar(['copy', 'search'], 'copy', 'copy')).toEqual(['copy', 'search']);
+  });
+});
+
+describe('supportsProofread', () => {
+  // Proofread rewrites the rendered text through the content transformers, so
+  // it works on every reflowable format -- not just EPUB, which is all the
+  // original feature (#2725) shipped with and all the toolbar button allowed.
+  test('enables every reflowable format', () => {
+    for (const format of ['EPUB', 'MD', 'MOBI', 'AZW', 'AZW3', 'FB2', 'FBZ', 'TXT'] as const) {
+      expect(supportsProofread(format)).toBe(true);
+    }
+  });
+
+  test('excludes the fixed-layout formats, which have no text to transform', () => {
+    expect(supportsProofread('PDF')).toBe(false);
+    expect(supportsProofread('CBZ')).toBe(false);
+  });
+
+  test('excludes a book whose format is not known yet', () => {
+    expect(supportsProofread(undefined)).toBe(false);
+  });
+});
+
+describe('shouldShowHighlightOptions (#5983)', () => {
+  const toolbarWithHighlight = DEFAULT_ANNOTATION_TOOLBAR_ITEMS;
+  const toolbarWithoutHighlight = removeToolFromToolbar(
+    DEFAULT_ANNOTATION_TOOLBAR_ITEMS,
+    'highlight',
+  );
+
+  test('shown for a fresh selection when the highlight tool is on the toolbar', () => {
+    expect(shouldShowHighlightOptions(toolbarWithHighlight, {})).toBe(true);
+  });
+
+  test('hidden for a fresh selection when the highlight tool is off the toolbar', () => {
+    expect(shouldShowHighlightOptions(toolbarWithoutHighlight, {})).toBe(false);
+  });
+
+  test('always shown for an already-annotated selection', () => {
+    expect(shouldShowHighlightOptions(toolbarWithoutHighlight, { annotated: true })).toBe(true);
+  });
+
+  test('hidden for a popup-window selection without a CFI, which cannot anchor a highlight', () => {
+    expect(shouldShowHighlightOptions(toolbarWithHighlight, { popup: true })).toBe(false);
+  });
+
+  test('shown for a popup-window selection that carries a CFI', () => {
+    expect(
+      shouldShowHighlightOptions(toolbarWithHighlight, { popup: true, cfi: 'epubcfi(/6/4!/4/2)' }),
+    ).toBe(true);
+  });
+
+  test('hidden with no selection', () => {
+    expect(shouldShowHighlightOptions(toolbarWithHighlight, null)).toBe(false);
   });
 });

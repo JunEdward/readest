@@ -10,6 +10,7 @@ import { useSidebarStore } from '@/store/sidebarStore';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { getGridTemplate, getInsetEdges } from '@/utils/grid';
+import { tauriSetWindowTitle } from '@/utils/window';
 import { useContentInsets } from '../hooks/useContentInsets';
 import SearchResultsNav from './sidebar/SearchResultsNav';
 import BooknotesNav from './sidebar/BooknotesNav';
@@ -261,10 +262,14 @@ const BookCellInner: React.FC<BookCellProps> = ({
       </div>
       <BookmarkPullDown bookKey={bookKey} ribbonHidden={!!hoveredBookKey} slideRef={slideRef} />
       <PageNavigationButtons bookKey={bookKey} isDropdownOpen={isDropdownOpen} />
-      <Annotator bookKey={bookKey} contentInsets={contentInsets} />
       <SearchResultsNav bookKey={bookKey} gridInsets={gridInsets} />
       <BooknotesNav bookKey={bookKey} gridInsets={gridInsets} toc={bookDoc.toc || []} />
       <FootnotePopup bookKey={bookKey} bookDoc={bookDoc} />
+      {/* After FootnotePopup so the lookup popups stack above the footnote
+          popup (and its dismiss overlay) when the user selects text inside it.
+          The selection toolbar no longer rides on this order — it has its own
+          z-[43] band, above the footnote popup's z-[42] (#6145). */}
+      <Annotator bookKey={bookKey} contentInsets={contentInsets} />
       <FooterBar
         bookKey={bookKey}
         bookFormat={book.format}
@@ -301,8 +306,14 @@ const BooksGrid: React.FC<BooksGridProps> = ({ bookKeys, onCloseBook, onGoToLibr
     const bookData = getBookData(sideBarBookKey);
     if (!bookData || !bookData.book) return;
     document.title = bookData.book.title;
+    // The OS window title is invisible but is what Alt+Tab and screen readers
+    // announce, so name the book there too — otherwise every window is just
+    // "Readest" and blind users cannot tell them apart.
+    if (appService?.hasWindow) {
+      tauriSetWindowTitle(bookData.book.title);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sideBarBookKey]);
+  }, [sideBarBookKey, appService?.hasWindow]);
 
   // Memoize the per-book grid insets array — its identity is the input
   // to BookCell.gridInsets, and BookCell is React.memo'd. As long as
@@ -350,7 +361,7 @@ const BooksGrid: React.FC<BooksGridProps> = ({ bookKeys, onCloseBook, onGoToLibr
 
   return (
     <div
-      className={clsx('books-grid bg-base-100 relative grid h-full flex-grow')}
+      className={clsx('books-grid bg-base-100 relative grid h-full grow')}
       style={gridStyle}
       role='main'
       aria-label={_('Books Content')}

@@ -31,6 +31,14 @@ pub(crate) async fn copy_uri_to_path<R: Runtime>(
 }
 
 #[command]
+pub(crate) async fn render_pdf_cover<R: Runtime>(
+    app: AppHandle<R>,
+    payload: RenderPdfCoverRequest,
+) -> Result<RenderPdfCoverResponse> {
+    app.native_bridge().render_pdf_cover(payload)
+}
+
+#[command]
 pub(crate) async fn save_image_to_gallery<R: Runtime>(
     app: AppHandle<R>,
     payload: SaveImageToGalleryRequest,
@@ -44,6 +52,14 @@ pub(crate) async fn use_background_audio<R: Runtime>(
     payload: UseBackgroundAudioRequest,
 ) -> Result<()> {
     app.native_bridge().use_background_audio(payload)
+}
+
+#[command]
+pub(crate) async fn set_multicast_lock<R: Runtime>(
+    app: AppHandle<R>,
+    payload: MulticastLockRequest,
+) -> Result<()> {
+    app.native_bridge().set_multicast_lock(payload)
 }
 
 #[command]
@@ -245,6 +261,11 @@ pub(crate) async fn select_directory<R: Runtime>(
 }
 
 #[command]
+pub(crate) async fn show_file_picker<R: Runtime>(app: AppHandle<R>) -> Result<()> {
+    app.native_bridge().show_file_picker()
+}
+
+#[command]
 pub(crate) async fn get_storefront_region_code<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<GetStorefrontRegionCodeResponse> {
@@ -340,4 +361,39 @@ pub(crate) async fn capture_webview_region<R: Runtime>(
         .native_bridge()
         .capture_webview_region(&window, payload)?;
     Ok(tauri::ipc::Response::new(png))
+}
+
+/// Freeze the on-screen pixels of a webview region behind a native layer
+/// that `capture_webview_region` does not see, for the two-column page curl
+/// (#6106). iOS only so far; other platforms reject and the JS side keeps
+/// a paper back on the leaf.
+#[command]
+pub(crate) async fn cover_webview_region<R: Runtime>(
+    app: AppHandle<R>,
+    payload: CaptureWebviewRegionRequest,
+) -> Result<CoverWebviewRegionResponse> {
+    app.native_bridge().cover_webview_region(payload)
+}
+
+#[command]
+pub(crate) async fn uncover_webview_region<R: Runtime>(
+    app: AppHandle<R>,
+    payload: UncoverWebviewRegionRequest,
+) -> Result<()> {
+    app.native_bridge().uncover_webview_region(payload)
+}
+
+#[command]
+pub(crate) async fn icloud_container_status<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<ICloudContainerStatusResponse> {
+    app.native_bridge().icloud_container_status()
+}
+
+#[command]
+pub(crate) async fn icloud_ensure_downloaded<R: Runtime>(
+    app: AppHandle<R>,
+    payload: ICloudEnsureDownloadedRequest,
+) -> Result<ICloudEnsureDownloadedResponse> {
+    app.native_bridge().icloud_ensure_downloaded(payload)
 }
